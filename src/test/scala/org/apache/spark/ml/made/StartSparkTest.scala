@@ -5,12 +5,13 @@ import matchers._
 import org.apache.spark.sql.SparkSession
 
 @Ignore
-class StartSparkTest extends AnyFlatSpec with should.Matchers with WithSpark {
+class StartSparkTest extends AnyFlatSpec with should.Matchers {
 
   "Spark" should "start context" in {
-    val s = spark
+    val spark = SparkSession.builder
+      .appName("Linear Regression")
+      .getOrCreate()
 
     Thread.sleep(60000)
   }
-
 }
