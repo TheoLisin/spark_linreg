@@ -14,7 +14,7 @@ import breeze.numerics._
 
 class LinearRegressionTest extends AnyFlatSpec with should.Matchers with WithSpark {
 
-  val delta = 0.01
+  val delta = 1e-6
   lazy val data: DataFrame = LinearRegressionTest._data
 
   "Model" should "make predictions" in {
