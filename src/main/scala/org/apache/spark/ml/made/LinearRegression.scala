@@ -57,45 +57,53 @@ with DefaultParamsWritable {
 
   override def fit(dataset: Dataset[_]): LinearRegressionModel = {
 
-    // Used to convert untyped dataframes to datasets with vectors
-    implicit val encoder : Encoder[Vector] = ExpressionEncoder()
-    
-    val assembler = new VectorAssembler()
-      .setInputCols(Array("intercept", $(featuresCol), $(labelCol)))
-      .setOutputCol("featsWithIntercept")
+    implicit val vEncoder : Encoder[Vector] = ExpressionEncoder()
+    implicit val dEncoder : Encoder[Double] = ExpressionEncoder()
 
-    val lrData  = assembler
-      .transform(dataset.withColumn("intercept", lit(1.0)))
-      .select("featsWithIntercept").as[Vector]
+    val lrData: Dataset[(Vector, Double)] = dataset.select(
+      dataset($(featuresCol)).as[Vector],
+      dataset($(labelCol)).as[Double]
+    )
 
-    val dim = lrData.first().size - 1
+    val dim = lrData.first()._1.size
     
     var weights = Vectors.dense(Array.fill(dim)(1.0)).asBreeze
+    var bias = 1.0
 
     for (_ <- 0 until $(numIterations)) {
-      val grad = lrData.rdd.mapPartitions((data: Iterator[Vector]) => {
-        val partsum = new MultivariateOnlineSummarizer()
-        data.grouped($(batchSize)).map ( batch => {
-          val batchsum = new MultivariateOnlineSummarizer()
-          batch.foreach( v => {
-            val row = v.asBreeze.toDenseVector
-            val x = row(0 until dim)
-            val y = row(-1)
-            batchsum.add(mllib.linalg.Vectors.fromBreeze(
-              ((x dot weights) - y) * x
-            ))
-          })
-          partsum.add(batchsum.mean)
-        })
-      }).reduce(_ merge _)
-      weights -= getLearningRate * grad.mean.asBreeze.toDenseVector *:* (2.0)
-    }
+      val (wGrad, bGrad) = lrData.rdd.mapPartitions((data: Iterator[(Vector, Double)]) => {
+        val wGradSum = new MultivariateOnlineSummarizer()
+        val bGradSum = new MultivariateOnlineSummarizer()
 
-    val vweights = Vectors.fromBreeze(weights(1 until weights.size).toDenseVector) 
-    val bias = weights(0)
+        data.grouped($(batchSize)).foreach ((batch) => {
+          val wGradSumBatch = new MultivariateOnlineSummarizer()
+          val bGradSumBatch = new MultivariateOnlineSummarizer()
+          batch.foreach( v  => {
+            val x = v._1.asBreeze
+            val y = v._2
+            
+            val pred = x dot weights + bias
+            val diff = pred - y
+            val grad = diff * x
+            wGradSumBatch.add(mllib.linalg.Vectors.fromBreeze(grad))
+            bGradSumBatch.add(mllib.linalg.Vectors.dense(diff))
+          })
+          wGradSum.add(wGradSumBatch.mean)
+          bGradSum.add(mllib.linalg.Vectors.dense(bGradSumBatch.mean(0)))
+        })
+        Iterator((wGradSum, bGradSum))
+      }).reduce((x, y) => {
+        (x._1 merge y._1, x._2 merge y._2)
+      })
+
+      val bGradMean = bGrad.mean(0)
+
+      weights -= wGrad.mean.asBreeze.toDenseVector *:* getLearningRate
+      bias -= getLearningRate * bGradMean
+    }
     
     copyValues(new LinearRegressionModel(
-      vweights,
+      Vectors.fromBreeze(weights),
       bias
     )
     ).setParent(this)
