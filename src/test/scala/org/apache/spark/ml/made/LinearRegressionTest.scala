@@ -19,7 +19,7 @@ class LinearRegressionTest extends AnyFlatSpec with should.Matchers with WithSpa
 
   "Model" should "make predictions" in {
     val model: LinearRegressionModel = new LinearRegressionModel(
-      weights = Vectors.dense(0.5, 1.5, 3.0).toDense,
+      weights = Vectors.dense(0.5, 1.5, -3.0).toDense,
       bias = 4.0
     ).setFeatureCol("features")
       .setLabelCol("label")
@@ -36,7 +36,7 @@ class LinearRegressionTest extends AnyFlatSpec with should.Matchers with WithSpa
       .setOutputCol("predictions")
 
     estimator.setLearningRate(0.01)
-    estimator.setNumIterations(1000)
+    estimator.setNumIterations(100)
 
     val model = estimator.fit(data)
 
@@ -119,7 +119,7 @@ object LinearRegressionTest extends WithSpark {
     ))
 
   lazy val bMatrix = DenseMatrix.rand(1000, 3)
-  lazy val trueW = DenseVector(0.5, 1.5, 3.0)
+  lazy val trueW = DenseVector(0.5, 1.5, -3.0)
   lazy val trueB = 4.0
   lazy val label = bMatrix * trueW + trueB
 

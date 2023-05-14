@@ -61,29 +61,34 @@ with DefaultParamsWritable {
     implicit val encoder : Encoder[Vector] = ExpressionEncoder()
     
     val assembler = new VectorAssembler()
-      .setInputCols(Array("intercept", $(featuresCol)))
-      .setOutputCol("featuresWithIntercept")
+      .setInputCols(Array("intercept", $(featuresCol), $(labelCol)))
+      .setOutputCol("featsWithIntercept")
 
-    val datasetWithIntercept  = assembler.transform(dataset.withColumn("intercept", lit(1.0)))
+    val lrData  = assembler
+      .transform(dataset.withColumn("intercept", lit(1.0)))
+      .select("featsWithIntercept").as[Vector]
 
-    val lrData = datasetWithIntercept.select("featuresWithIntercept", $(labelCol))
-      .rdd.map(row => (row.getAs[Vector](0), row.getDouble(1)))
-      .collect()
+    val dim = lrData.first().size - 1
     
-    val dim = lrData(0)._1.size
-    
-    var weights = Vectors.dense(Array.fill(dim)(0.0)).asBreeze
+    var weights = Vectors.dense(Array.fill(dim)(1.0)).asBreeze
 
     for (_ <- 0 until $(numIterations)) {
-      lrData.grouped($(batchSize)).foreach { batch =>
-        val grad = batch.foldLeft(Vectors.dense(Array.fill(dim)(0.0)).asBreeze) {
-          case (sumGrad, (features, label)) =>
-            val x = features.asBreeze
-            val pred = (x dot weights)
-            sumGrad + (pred - label) * x
-        }
-        weights -= getLearningRate * grad / batch.length.toDouble
-      }
+      val grad = lrData.rdd.mapPartitions((data: Iterator[Vector]) => {
+        val partsum = new MultivariateOnlineSummarizer()
+        data.grouped($(batchSize)).map ( batch => {
+          val batchsum = new MultivariateOnlineSummarizer()
+          batch.foreach( v => {
+            val row = v.asBreeze.toDenseVector
+            val x = row(0 until dim)
+            val y = row(-1)
+            batchsum.add(mllib.linalg.Vectors.fromBreeze(
+              ((x dot weights) - y) * x
+            ))
+          })
+          partsum.add(batchsum.mean)
+        })
+      }).reduce(_ merge _)
+      weights -= getLearningRate * grad.mean.asBreeze.toDenseVector *:* (2.0)
     }
 
     val vweights = Vectors.fromBreeze(weights(1 until weights.size).toDenseVector) 
@@ -151,7 +156,7 @@ object LinearRegressionModel extends MLReadable[LinearRegressionModel] {
         .as[Vector]).first().asBreeze.toDenseVector
 
       val weights = Vectors.fromBreeze(params(0 until params.size - 1))
-      val bias = params(params.size - 1)
+      val bias = params(-1)
 
       val model = new LinearRegressionModel(weights, bias)
       metadata.getAndSetParams(model)
